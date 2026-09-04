@@ -1,0 +1,126 @@
+use std::io::Read;
+
+fn main() {
+    let mut json = false;
+    let mut file: Option<String> = None;
+
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--json" => json = true,
+            "--file" => {
+                i += 1;
+                match args.get(i) {
+                    Some(path) => file = Some(path.clone()),
+                    None => {
+                        eprintln!("--file needs a path");
+                        std::process::exit(2);
+                    }
+                }
+            }
+            "-h" | "--help" => {
+                print_help();
+                return;
+            }
+            other => {
+                eprintln!("unrecognized argument: {}", other);
+                print_help();
+                std::process::exit(2);
+            }
+        }
+        i += 1;
+    }
+
+    let input = match file {
+        Some(path) => std::fs::read_to_string(&path).unwrap_or_else(|e| {
+            eprintln!("failed to read {}: {}", path, e);
+            std::process::exit(1);
+        }),
+        None => {
+            let mut buf = String::new();
+            if std::io::stdin().read_to_string(&mut buf).is_err() {
+                eprintln!("failed to read stdin");
+                std::process::exit(1);
+            }
+            buf
+        }
+    };
+
+    let headers = cache_lens::parse_headers(&input);
+    let analysis = cache_lens::analyze(&headers);
+
+    if json {
+        println!("{}", to_json(&analysis));
+    } else {
+        print_human(&analysis);
+    }
+}
+
+fn print_human(a: &cache_lens::Analysis) {
+    println!("cacheable: {}", a.cacheable);
+    match a.freshness_seconds {
+        Some(s) if s >= 0 => println!("fresh for: {}s", s),
+        Some(s) => println!("stale by: {}s", -s),
+        None => println!("freshness: unknown"),
+    }
+    if !a.notes.is_empty() {
+        println!("notes:");
+        for note in &a.notes {
+            println!("  - {}", note);
+        }
+    }
+}
+
+fn to_json(a: &cache_lens::Analysis) -> String {
+    let mut out = String::from("{");
+    out.push_str("\"cacheable\":");
+    out.push_str(if a.cacheable { "true" } else { "false" });
+
+    out.push_str(",\"freshness_seconds\":");
+    match a.freshness_seconds {
+        Some(v) => out.push_str(&v.to_string()),
+        None => out.push_str("null"),
+    }
+
+    out.push_str(",\"notes\":[");
+    for (idx, note) in a.notes.iter().enumerate() {
+        if idx > 0 {
+            out.push(',');
+        }
+        out.push_str(&json_escape(note));
+    }
+    out.push_str("]}");
+    out
+}
+
+fn json_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+fn print_help() {
+    println!("cache-lens - inspect HTTP cache headers");
+    println!();
+    println!("usage:");
+    println!("  curl -sI https://example.com | cache-lens");
+    println!("  cache-lens --file headers.txt");
+    println!("  cache-lens --json < headers.txt");
+    println!();
+    println!("reads response headers (one \"Name: Value\" pair per line) from");
+    println!("stdin or --file, and reports whether the response is cacheable");
+    println!("and how long it stays fresh.");
+}

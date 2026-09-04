@@ -1,0 +1,10 @@
+[package]
+name = "cache-lens"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Inspect HTTP cache headers and report what a cache will actually do with a response"
+
+[[bin]]
+name = "cache-lens"
+path = "src/main.rs"
