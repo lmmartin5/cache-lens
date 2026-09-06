@@ -43,12 +43,33 @@ to be piped into other tools:
 
 ```
 $ cache-lens --json < headers.txt
-{"cacheable":true,"freshness_seconds":3421,"notes":["freshness computed from max-age=3600"]}
+{"cacheable":true,"freshness_seconds":3421,"etag":null,"last_modified":null,"not_modified":null,"notes":["freshness computed from max-age=3600"]}
 ```
 
 `freshness_seconds` is `null` when there's no `max-age` or usable
 `Expires`/`Date` pair to compute it from, and negative when the response
 is already stale.
+
+## revalidation
+
+Once a response goes stale, a cache doesn't have to refetch the whole
+thing - if the response carries an `ETag` or `Last-Modified`, the cache
+can send a conditional request and the origin answers `304 Not Modified`
+if nothing changed. Check what that conditional request would get back:
+
+```
+$ cache-lens --if-none-match '"abc123"' < headers.txt
+cacheable: true
+stale by: 12s
+etag: "abc123"
+revalidation: 304 Not Modified
+```
+
+`--if-modified-since <http-date>` works the same way against
+`Last-Modified`. If both are given, `--if-none-match` wins, matching how
+an origin server evaluates the two (RFC 7232 section 6). The JSON output
+gains a `not_modified` boolean (`null` unless one of these flags is
+passed).
 
 ## library
 
@@ -59,7 +80,9 @@ println!("{}", analysis.cacheable);
 ```
 
 `parse_cache_control` and `parse_http_date` are also public if you just
-need those two pieces.
+need those two pieces, and `is_not_modified` / `if_none_match_satisfied` /
+`etag_matches` implement the `If-None-Match` and `If-Modified-Since`
+comparison rules from RFC 7232 on their own.
 
 ## input format
 

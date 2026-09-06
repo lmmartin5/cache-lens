@@ -138,6 +138,12 @@ pub struct Analysis {
     /// Negative means it's already stale. `None` means there's no explicit
     /// freshness lifetime to compute one from.
     pub freshness_seconds: Option<i64>,
+    /// `ETag` header value, unparsed (still carries its quotes and any
+    /// `W/` weak indicator), if the response had one.
+    pub etag: Option<String>,
+    /// `Last-Modified` header, parsed to a Unix timestamp, if present and
+    /// parseable.
+    pub last_modified: Option<i64>,
     /// Plain-language explanations for the verdict above, in the order the
     /// rules were applied.
     pub notes: Vec<String>,
@@ -162,6 +168,8 @@ pub fn analyze(headers: &[(String, String)]) -> Analysis {
         return Analysis {
             cacheable: false,
             freshness_seconds: None,
+            etag: None,
+            last_modified: None,
             notes,
         };
     }
@@ -207,10 +215,82 @@ pub fn analyze(headers: &[(String, String)]) -> Analysis {
         None
     };
 
+    let etag = get("etag").map(|s| s.to_string());
+    let last_modified = get("last-modified").and_then(parse_http_date);
+
+    match (&etag, last_modified) {
+        (Some(tag), _) => notes.push(format!(
+            "has an ETag ({}); once stale it can be revalidated with If-None-Match instead of a full refetch",
+            tag
+        )),
+        (None, Some(_)) => notes.push(
+            "has a Last-Modified date; once stale it can be revalidated with If-Modified-Since instead of a full refetch"
+                .to_string(),
+        ),
+        (None, None) => {}
+    }
+
     Analysis {
         cacheable: true,
         freshness_seconds,
+        etag,
+        last_modified,
         notes,
+    }
+}
+
+/// Strips the `W/` weak-validator prefix from an `ETag`, if present, leaving
+/// the quoted opaque tag behind.
+fn strip_weak(tag: &str) -> &str {
+    tag.strip_prefix("W/").unwrap_or(tag)
+}
+
+/// Compares two `ETag` values using the *weak* comparison function (RFC 7232
+/// section 2.3.2): opaque tags must match, but the weak indicator is
+/// ignored. This is the comparison `If-None-Match` is defined to use.
+pub fn etag_matches(a: &str, b: &str) -> bool {
+    strip_weak(a.trim()) == strip_weak(b.trim())
+}
+
+/// Evaluates an `If-None-Match` request header against a response's `ETag`.
+/// Returns `true` when the precondition is satisfied, meaning the cache's
+/// stored copy is still good and the origin should answer `304 Not Modified`
+/// rather than resending the body.
+///
+/// `if_none_match` may be `*` (matches any existing representation) or a
+/// comma-separated list of entity tags, per RFC 7232 section 3.2.
+pub fn if_none_match_satisfied(if_none_match: &str, etag: &str) -> bool {
+    let if_none_match = if_none_match.trim();
+    if if_none_match == "*" {
+        return !etag.is_empty();
+    }
+    if etag.is_empty() {
+        return false;
+    }
+    if_none_match
+        .split(',')
+        .any(|candidate| etag_matches(candidate.trim(), etag))
+}
+
+/// Works out whether a conditional request would come back `304 Not
+/// Modified` against the response validators `analyze` extracted.
+///
+/// `If-None-Match` takes precedence over `If-Modified-Since` when both are
+/// present, matching the origin server's evaluation order in RFC 7232
+/// section 6. Pass `None` for whichever conditional header the request
+/// didn't send.
+pub fn is_not_modified(
+    etag: Option<&str>,
+    last_modified: Option<i64>,
+    if_none_match: Option<&str>,
+    if_modified_since: Option<i64>,
+) -> bool {
+    if let Some(inm) = if_none_match {
+        return if_none_match_satisfied(inm, etag.unwrap_or(""));
+    }
+    match (last_modified, if_modified_since) {
+        (Some(lm), Some(since)) => lm <= since,
+        _ => false,
     }
 }
 
@@ -243,5 +323,57 @@ mod tests {
         let a = analyze(&headers);
         assert!(a.cacheable);
         assert_eq!(a.freshness_seconds, Some(60));
+    }
+
+    #[test]
+    fn analyze_picks_up_etag_and_last_modified() {
+        let headers = vec![
+            ("ETag".to_string(), "\"abc123\"".to_string()),
+            (
+                "Last-Modified".to_string(),
+                "Sun, 06 Nov 1994 08:49:37 GMT".to_string(),
+            ),
+        ];
+        let a = analyze(&headers);
+        assert_eq!(a.etag.as_deref(), Some("\"abc123\""));
+        assert!(a.last_modified.is_some());
+    }
+
+    #[test]
+    fn etag_matches_ignores_weak_indicator() {
+        assert!(etag_matches("W/\"abc\"", "\"abc\""));
+        assert!(etag_matches("\"abc\"", "\"abc\""));
+        assert!(!etag_matches("\"abc\"", "\"xyz\""));
+    }
+
+    #[test]
+    fn if_none_match_star_matches_any_existing_etag() {
+        assert!(if_none_match_satisfied("*", "\"abc\""));
+        assert!(!if_none_match_satisfied("*", ""));
+    }
+
+    #[test]
+    fn if_none_match_checks_list_of_candidates() {
+        let list = "\"one\", \"two\", W/\"abc\"";
+        assert!(if_none_match_satisfied(list, "\"abc\""));
+        assert!(!if_none_match_satisfied(list, "\"three\""));
+    }
+
+    #[test]
+    fn is_not_modified_prefers_etag_over_date() {
+        // If-None-Match fails but If-Modified-Since would pass; the ETag
+        // check wins and the answer is "modified".
+        assert!(!is_not_modified(
+            Some("\"abc\""),
+            Some(1000),
+            Some("\"different\""),
+            Some(2000)
+        ));
+    }
+
+    #[test]
+    fn is_not_modified_falls_back_to_last_modified() {
+        assert!(is_not_modified(None, Some(1000), None, Some(2000)));
+        assert!(!is_not_modified(None, Some(3000), None, Some(2000)));
     }
 }
