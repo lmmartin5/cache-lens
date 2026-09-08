@@ -43,12 +43,32 @@ to be piped into other tools:
 
 ```
 $ cache-lens --json < headers.txt
-{"cacheable":true,"freshness_seconds":3421,"etag":null,"last_modified":null,"not_modified":null,"notes":["freshness computed from max-age=3600"]}
+{"cacheable":true,"freshness_seconds":3421,"etag":null,"last_modified":null,"vary":[],"not_modified":null,"notes":["freshness computed from max-age=3600"]}
 ```
 
 `freshness_seconds` is `null` when there's no `max-age` or usable
 `Expires`/`Date` pair to compute it from, and negative when the response
 is already stale.
+
+## Vary
+
+A cached response is only reusable for a later request if that request
+matches on every header listed in `Vary`. cache-lens flags the two ways
+that tends to go wrong: `Vary: *`, which means the response depends on
+something outside the request headers it can see and so a shared cache
+can basically never reuse it, and `Vary` lists that are broad enough to
+fragment the cache badly - `User-Agent` (near-unique per client) or any
+list longer than three headers:
+
+```
+$ cache-lens < headers.txt
+cacheable: true
+fresh for: 3421s
+vary: Accept-Encoding, User-Agent
+notes:
+  - freshness computed from max-age=3600
+  - Vary includes User-Agent, whose value differs per client; this fragments the cache into roughly one entry per visitor
+```
 
 ## revalidation
 

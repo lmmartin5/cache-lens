@@ -144,6 +144,9 @@ pub struct Analysis {
     /// `Last-Modified` header, parsed to a Unix timestamp, if present and
     /// parseable.
     pub last_modified: Option<i64>,
+    /// Header names listed in `Vary`, in the order they appeared. Empty if
+    /// there was no `Vary` header.
+    pub vary: Vec<String>,
     /// Plain-language explanations for the verdict above, in the order the
     /// rules were applied.
     pub notes: Vec<String>,
@@ -170,8 +173,37 @@ pub fn analyze(headers: &[(String, String)]) -> Analysis {
             freshness_seconds: None,
             etag: None,
             last_modified: None,
+            vary: Vec::new(),
             notes,
         };
+    }
+
+    let vary: Vec<String> = get("vary")
+        .map(|v| {
+            v.split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect()
+        })
+        .unwrap_or_default();
+
+    if vary.iter().any(|v| v == "*") {
+        notes.push(
+            "Vary: * means the response depends on request headers this analysis can't see; a shared cache can effectively never reuse it".to_string(),
+        );
+    } else {
+        if vary.iter().any(|v| v.eq_ignore_ascii_case("user-agent")) {
+            notes.push(
+                "Vary includes User-Agent, whose value differs per client; this fragments the cache into roughly one entry per visitor".to_string(),
+            );
+        }
+        if vary.len() > 3 {
+            notes.push(format!(
+                "Vary lists {} headers ({}); each unique combination gets its own cache entry, which can fragment the cache badly",
+                vary.len(),
+                vary.join(", ")
+            ));
+        }
     }
 
     if get("set-cookie").is_some() && !cc.public {
@@ -235,6 +267,7 @@ pub fn analyze(headers: &[(String, String)]) -> Analysis {
         freshness_seconds,
         etag,
         last_modified,
+        vary,
         notes,
     }
 }
@@ -369,6 +402,41 @@ mod tests {
             Some("\"different\""),
             Some(2000)
         ));
+    }
+
+    #[test]
+    fn vary_star_warns_and_skips_other_vary_notes() {
+        let headers = vec![("Vary".to_string(), "*".to_string())];
+        let a = analyze(&headers);
+        assert_eq!(a.vary, vec!["*".to_string()]);
+        assert!(a.notes.iter().any(|n| n.contains("Vary: *")));
+        assert!(!a.notes.iter().any(|n| n.contains("fragments the cache")));
+    }
+
+    #[test]
+    fn vary_user_agent_warns_about_fragmentation() {
+        let headers = vec![("Vary".to_string(), "Accept-Encoding, User-Agent".to_string())];
+        let a = analyze(&headers);
+        assert_eq!(a.vary, vec!["Accept-Encoding".to_string(), "User-Agent".to_string()]);
+        assert!(a.notes.iter().any(|n| n.contains("User-Agent")));
+    }
+
+    #[test]
+    fn vary_with_many_headers_warns_about_fragmentation() {
+        let headers = vec![(
+            "Vary".to_string(),
+            "Accept, Accept-Encoding, Accept-Language, Cookie".to_string(),
+        )];
+        let a = analyze(&headers);
+        assert_eq!(a.vary.len(), 4);
+        assert!(a.notes.iter().any(|n| n.contains("lists 4 headers")));
+    }
+
+    #[test]
+    fn vary_absent_leaves_notes_and_vary_list_empty() {
+        let a = analyze(&[]);
+        assert!(a.vary.is_empty());
+        assert!(!a.notes.iter().any(|n| n.contains("Vary")));
     }
 
     #[test]

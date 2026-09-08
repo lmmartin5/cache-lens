@@ -111,6 +111,9 @@ fn print_human(a: &cache_lens::Analysis, not_modified: Option<bool>) {
     if let Some(etag) = &a.etag {
         println!("etag: {}", etag);
     }
+    if !a.vary.is_empty() {
+        println!("vary: {}", a.vary.join(", "));
+    }
     if let Some(not_modified) = not_modified {
         println!(
             "revalidation: {}",
@@ -151,6 +154,15 @@ fn to_json(a: &cache_lens::Analysis, not_modified: Option<bool>) -> String {
         Some(v) => out.push_str(&v.to_string()),
         None => out.push_str("null"),
     }
+
+    out.push_str(",\"vary\":[");
+    for (idx, name) in a.vary.iter().enumerate() {
+        if idx > 0 {
+            out.push(',');
+        }
+        out.push_str(&json_escape(name));
+    }
+    out.push(']');
 
     out.push_str(",\"not_modified\":");
     match not_modified {
