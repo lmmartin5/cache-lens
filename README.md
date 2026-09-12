@@ -43,12 +43,33 @@ to be piped into other tools:
 
 ```
 $ cache-lens --json < headers.txt
-{"cacheable":true,"freshness_seconds":3421,"etag":null,"last_modified":null,"vary":[],"not_modified":null,"notes":["freshness computed from max-age=3600"]}
+{"cacheable":true,"freshness_seconds":3421,"etag":null,"last_modified":null,"vary":[],"stale_while_revalidate":null,"stale_if_error":null,"not_modified":null,"notes":["freshness computed from max-age=3600"]}
 ```
 
 `freshness_seconds` is `null` when there's no `max-age` or usable
 `Expires`/`Date` pair to compute it from, and negative when the response
 is already stale.
+
+## stale-while-revalidate and stale-if-error
+
+These two `Cache-Control` extensions (RFC 5861) don't change how long a
+response is fresh - they say how much longer a cache may keep serving it
+*after* it goes stale, either while fetching a fresh copy in the
+background (`stale-while-revalidate`) or when that fetch fails
+(`stale-if-error`). cache-lens surfaces both as separate fields rather
+than folding them into `freshness_seconds`, since serving stale content
+under either directive is a distinct, cache-implementation-dependent
+behavior from being fresh:
+
+```
+$ cache-lens < headers.txt
+cacheable: true
+fresh for: 55s
+stale-while-revalidate: 30s
+notes:
+  - freshness computed from max-age=60
+  - stale-while-revalidate=30: once stale, a cache may keep serving this for up to 30s while it revalidates in the background
+```
 
 ## Vary
 

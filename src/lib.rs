@@ -147,6 +147,14 @@ pub struct Analysis {
     /// Header names listed in `Vary`, in the order they appeared. Empty if
     /// there was no `Vary` header.
     pub vary: Vec<String>,
+    /// Seconds past the freshness lifetime a cache may still serve this
+    /// response while it revalidates in the background, from
+    /// `stale-while-revalidate`. `None` if the directive wasn't present.
+    pub stale_while_revalidate: Option<i64>,
+    /// Seconds past the freshness lifetime a cache may still serve this
+    /// response if a revalidation request fails, from `stale-if-error`.
+    /// `None` if the directive wasn't present.
+    pub stale_if_error: Option<i64>,
     /// Plain-language explanations for the verdict above, in the order the
     /// rules were applied.
     pub notes: Vec<String>,
@@ -174,6 +182,8 @@ pub fn analyze(headers: &[(String, String)]) -> Analysis {
             etag: None,
             last_modified: None,
             vary: Vec::new(),
+            stale_while_revalidate: None,
+            stale_if_error: None,
             notes,
         };
     }
@@ -262,12 +272,27 @@ pub fn analyze(headers: &[(String, String)]) -> Analysis {
         (None, None) => {}
     }
 
+    if let Some(swr) = cc.stale_while_revalidate {
+        notes.push(format!(
+            "stale-while-revalidate={}: once stale, a cache may keep serving this for up to {}s while it revalidates in the background",
+            swr, swr
+        ));
+    }
+    if let Some(sie) = cc.stale_if_error {
+        notes.push(format!(
+            "stale-if-error={}: once stale, a cache may keep serving this for up to {}s if revalidation fails",
+            sie, sie
+        ));
+    }
+
     Analysis {
         cacheable: true,
         freshness_seconds,
         etag,
         last_modified,
         vary,
+        stale_while_revalidate: cc.stale_while_revalidate,
+        stale_if_error: cc.stale_if_error,
         notes,
     }
 }
@@ -437,6 +462,29 @@ mod tests {
         let a = analyze(&[]);
         assert!(a.vary.is_empty());
         assert!(!a.notes.iter().any(|n| n.contains("Vary")));
+    }
+
+    #[test]
+    fn stale_while_revalidate_is_surfaced_with_a_note() {
+        let headers = vec![(
+            "Cache-Control".to_string(),
+            "max-age=60, stale-while-revalidate=30".to_string(),
+        )];
+        let a = analyze(&headers);
+        assert_eq!(a.stale_while_revalidate, Some(30));
+        assert_eq!(a.stale_if_error, None);
+        assert!(a.notes.iter().any(|n| n.contains("stale-while-revalidate=30")));
+    }
+
+    #[test]
+    fn stale_if_error_is_surfaced_with_a_note() {
+        let headers = vec![(
+            "Cache-Control".to_string(),
+            "max-age=60, stale-if-error=120".to_string(),
+        )];
+        let a = analyze(&headers);
+        assert_eq!(a.stale_if_error, Some(120));
+        assert!(a.notes.iter().any(|n| n.contains("stale-if-error=120")));
     }
 
     #[test]

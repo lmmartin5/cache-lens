@@ -114,6 +114,12 @@ fn print_human(a: &cache_lens::Analysis, not_modified: Option<bool>) {
     if !a.vary.is_empty() {
         println!("vary: {}", a.vary.join(", "));
     }
+    if let Some(swr) = a.stale_while_revalidate {
+        println!("stale-while-revalidate: {}s", swr);
+    }
+    if let Some(sie) = a.stale_if_error {
+        println!("stale-if-error: {}s", sie);
+    }
     if let Some(not_modified) = not_modified {
         println!(
             "revalidation: {}",
@@ -163,6 +169,18 @@ fn to_json(a: &cache_lens::Analysis, not_modified: Option<bool>) -> String {
         out.push_str(&json_escape(name));
     }
     out.push(']');
+
+    out.push_str(",\"stale_while_revalidate\":");
+    match a.stale_while_revalidate {
+        Some(v) => out.push_str(&v.to_string()),
+        None => out.push_str("null"),
+    }
+
+    out.push_str(",\"stale_if_error\":");
+    match a.stale_if_error {
+        Some(v) => out.push_str(&v.to_string()),
+        None => out.push_str("null"),
+    }
 
     out.push_str(",\"not_modified\":");
     match not_modified {
