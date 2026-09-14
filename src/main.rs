@@ -80,24 +80,50 @@ fn main() {
         }
     };
 
-    let headers = cache_lens::parse_headers(&input);
-    let analysis = cache_lens::analyze(&headers);
+    let blocks = cache_lens::parse_response_blocks(&input);
+    if blocks.is_empty() {
+        eprintln!("no headers found in input");
+        std::process::exit(1);
+    }
 
-    let not_modified = if if_none_match.is_some() || if_modified_since_ts.is_some() {
-        Some(cache_lens::is_not_modified(
-            analysis.etag.as_deref(),
-            analysis.last_modified,
-            if_none_match.as_deref(),
-            if_modified_since_ts,
-        ))
-    } else {
-        None
-    };
+    let results: Vec<(cache_lens::Analysis, Option<bool>)> = blocks
+        .iter()
+        .map(|headers| {
+            let analysis = cache_lens::analyze(headers);
+            let not_modified = if if_none_match.is_some() || if_modified_since_ts.is_some() {
+                Some(cache_lens::is_not_modified(
+                    analysis.etag.as_deref(),
+                    analysis.last_modified,
+                    if_none_match.as_deref(),
+                    if_modified_since_ts,
+                ))
+            } else {
+                None
+            };
+            (analysis, not_modified)
+        })
+        .collect();
 
     if json {
-        println!("{}", to_json(&analysis, not_modified));
+        if results.len() == 1 {
+            println!("{}", to_json(&results[0].0, results[0].1));
+        } else {
+            let items: Vec<String> = results
+                .iter()
+                .map(|(a, nm)| to_json(a, *nm))
+                .collect();
+            println!("[{}]", items.join(","));
+        }
+    } else if results.len() == 1 {
+        print_human(&results[0].0, results[0].1);
     } else {
-        print_human(&analysis, not_modified);
+        for (idx, (analysis, not_modified)) in results.iter().enumerate() {
+            if idx > 0 {
+                println!();
+            }
+            println!("--- response {} of {} ---", idx + 1, results.len());
+            print_human(analysis, *not_modified);
+        }
     }
 }
 
@@ -229,6 +255,10 @@ fn print_help() {
     println!("reads response headers (one \"Name: Value\" pair per line) from");
     println!("stdin or --file, and reports whether the response is cacheable");
     println!("and how long it stays fresh.");
+    println!();
+    println!("input may contain more than one response's headers, separated");
+    println!("by a blank line (as curl -sIL prints between redirect hops);");
+    println!("each one is analyzed and reported separately.");
     println!();
     println!("--if-none-match <value>       check the response's ETag against a");
     println!("                              client-supplied If-None-Match value");

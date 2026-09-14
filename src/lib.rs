@@ -75,6 +75,33 @@ pub fn parse_headers(text: &str) -> Vec<(String, String)> {
     out
 }
 
+/// Splits input containing more than one response's headers into separate
+/// header sets, so a whole redirect chain (`curl -sIL`) or a batch of
+/// responses saved back to back can be analyzed in one run. Responses are
+/// separated by one or more blank lines - the same shape `curl -sIL`
+/// produces between hops, and a reasonable format for hand-assembled files.
+/// A single response with no blank lines in it comes back as one block, so
+/// this is safe to use unconditionally in place of `parse_headers`.
+pub fn parse_response_blocks(text: &str) -> Vec<Vec<(String, String)>> {
+    let mut blocks = Vec::new();
+    let mut current = String::new();
+    for line in text.lines() {
+        if line.trim().is_empty() {
+            if !current.is_empty() {
+                blocks.push(parse_headers(&current));
+                current.clear();
+            }
+        } else {
+            current.push_str(line);
+            current.push('\n');
+        }
+    }
+    if !current.is_empty() {
+        blocks.push(parse_headers(&current));
+    }
+    blocks
+}
+
 /// Parses an RFC 1123 HTTP date (`Sun, 06 Nov 1994 08:49:37 GMT`) into a
 /// Unix timestamp. This is the only date format `Expires` and `Date` are
 /// allowed to use in current HTTP, so nothing else is supported.
@@ -491,5 +518,55 @@ mod tests {
     fn is_not_modified_falls_back_to_last_modified() {
         assert!(is_not_modified(None, Some(1000), None, Some(2000)));
         assert!(!is_not_modified(None, Some(3000), None, Some(2000)));
+    }
+
+    #[test]
+    fn parse_response_blocks_single_block_matches_parse_headers() {
+        let text = "Cache-Control: max-age=60\nETag: \"abc\"\n";
+        let blocks = parse_response_blocks(text);
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0], parse_headers(text));
+    }
+
+    #[test]
+    fn parse_response_blocks_splits_on_blank_lines() {
+        let text = "\
+HTTP/1.1 301 Moved Permanently
+Location: https://example.com/
+
+HTTP/1.1 200 OK
+Cache-Control: max-age=3600
+ETag: \"xyz\"
+";
+        let blocks = parse_response_blocks(text);
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[0], vec![("Location".to_string(), "https://example.com/".to_string())]);
+        assert_eq!(
+            blocks[1],
+            vec![
+                ("Cache-Control".to_string(), "max-age=3600".to_string()),
+                ("ETag".to_string(), "\"xyz\"".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_response_blocks_collapses_runs_of_blank_lines() {
+        let text = "Cache-Control: max-age=1\n\n\n\nCache-Control: max-age=2\n";
+        let blocks = parse_response_blocks(text);
+        assert_eq!(blocks.len(), 2);
+    }
+
+    #[test]
+    fn parse_response_blocks_ignores_trailing_blank_lines() {
+        let text = "Cache-Control: max-age=1\n\n\n";
+        let blocks = parse_response_blocks(text);
+        assert_eq!(blocks.len(), 1);
+    }
+
+    #[test]
+    fn parse_response_blocks_empty_input_yields_no_blocks() {
+        assert!(parse_response_blocks("").is_empty());
+        assert!(parse_response_blocks("\n\n\n").is_empty());
     }
 }

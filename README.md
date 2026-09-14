@@ -123,7 +123,37 @@ println!("{}", analysis.cacheable);
 `parse_cache_control` and `parse_http_date` are also public if you just
 need those two pieces, and `is_not_modified` / `if_none_match_satisfied` /
 `etag_matches` implement the `If-None-Match` and `If-Modified-Since`
-comparison rules from RFC 7232 on their own.
+comparison rules from RFC 7232 on their own. `parse_response_blocks`
+splits blank-line-separated input into one header set per response, for
+the batch case described below.
+
+## batch input
+
+Input can hold more than one response's headers, separated by a blank
+line - the shape `curl -sIL` prints between redirect hops, and a
+reasonable format if you paste a few responses into one file by hand.
+Each one is analyzed on its own and reported separately:
+
+```
+$ curl -sIL https://example.com/old-path | cache-lens
+--- response 1 of 2 ---
+cacheable: true
+freshness: unknown
+notes:
+  - no max-age or Expires; response has no explicit freshness lifetime
+
+--- response 2 of 2 ---
+cacheable: true
+fresh for: 3421s
+notes:
+  - freshness computed from max-age=3600
+```
+
+`--json` follows the same rule: a single response still prints a bare
+object (matching the shape above), but more than one prints a JSON array
+of those objects in order. `--if-none-match` and `--if-modified-since`,
+if given, are checked against every response in the batch using that
+response's own `ETag`/`Last-Modified`.
 
 ## input format
 
