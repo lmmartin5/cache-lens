@@ -4,6 +4,10 @@ version = "0.1.0"
 edition = "2021"
 license = "MIT"
 description = "Inspect HTTP cache headers and report what a cache will actually do with a response"
+repository = "https://github.com/lmmartin5/cache-lens"
+readme = "README.md"
+keywords = ["http", "cache-control", "caching", "cli", "rfc7234"]
+categories = ["command-line-utilities", "caching"]
 
 [[bin]]
 name = "cache-lens"
